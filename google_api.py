@@ -3,7 +3,7 @@ import pandas as pd
 import time
 from openpyxl import load_workbook
 
-API_KEY = "AIzaSyDcQxKclLAMW5u8DXU5rpQnTwq22fxBlXg"
+API_KEY = "YOUR_API_KEY"
 
 TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 DETAILS_URL_BASE = "https://places.googleapis.com/v1/places/"
