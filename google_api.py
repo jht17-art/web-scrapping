@@ -2,8 +2,13 @@ import requests
 import pandas as pd
 import time
 from openpyxl import load_workbook
+from dotenv import load_dotenv
+import os
+from urllib.parse import urlparse
+import re
 
-API_KEY = "AIzaSyDcQxKclLAMW5u8DXU5rpQnTwq22fxBlXg"
+load_dotenv()
+API_KEY = os.getenv("API_KEY")
 
 TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 DETAILS_URL_BASE = "https://places.googleapis.com/v1/places/"
@@ -44,11 +49,11 @@ DETAILS_FIELD_MASK = ",".join([
 ])
 
 PRICE_MAP = {
-    "PRICE_LEVEL_FREE": 0,
-    "PRICE_LEVEL_INEXPENSIVE": 1,
-    "PRICE_LEVEL_MODERATE": 2,
-    "PRICE_LEVEL_EXPENSIVE": 3,
-    "PRICE_LEVEL_VERY_EXPENSIVE": 4
+    "Free":0,
+    "Cheap": 1,
+    "Moderate": 2,
+    "Expensive": 3,
+    "Very Expensive": 4
 }
 
 PRICE_TEXT_MAP = {
@@ -59,6 +64,8 @@ PRICE_TEXT_MAP = {
     "PRICE_LEVEL_VERY_EXPENSIVE": "Very Expensive"
 }
 
+output_file = "dhaka_burger_shops_final.xlsx"
+
 
 def headers(field_mask: str) -> dict:
     return {
@@ -67,6 +74,13 @@ def headers(field_mask: str) -> dict:
         "X-Goog-FieldMask": field_mask,
     }
 
+def extract_email(url):
+    try:
+        r = requests.get(url, timeout=5)
+        emails = re.findall(r"[\w\.-]+@[\w\.-]+", r.text)
+        return emails[0] if emails else None
+    except:
+        return None
 
 def money_to_text(money_obj):
     if not money_obj:
@@ -100,7 +114,6 @@ def parse_price_range(price_range_obj):
     start_price = money_to_text(price_range_obj.get("startPrice"))
     end_price = money_to_text(price_range_obj.get("endPrice"))
     return start_price, end_price
-
 
 def fetch_text_search_page(query, page_token=None):
     body = {
@@ -143,6 +156,14 @@ def fetch_place_details(place_id: str):
     response.raise_for_status()
     return response.json()
 
+def col_order(df,col_1,col_2):
+    cols = list(df.columns)
+
+    if col_1 in cols and col_2 in cols:
+        cols.insert(cols.index(col_2), cols.pop(cols.index(col_1)))
+
+    df = df[cols]
+    return df
 
 def make_excel_links_clickable(filename, sheet_name):
     wb = load_workbook(filename)
@@ -204,6 +225,94 @@ def collect_places():
 
     return all_places
 
+def is_nonempty_str(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def safe_lower(value) -> str:
+    return value.lower() if isinstance(value, str) else ""
+
+
+def extract_email(url):
+    if not is_nonempty_str(url) or not url.startswith(("http://", "https://")):
+        return None
+    try:
+        response = requests.get(url, timeout=5)
+        emails = re.findall(r"[\w\.-]+@[\w\.-]+", response.text)
+        return emails[0] if emails else None
+    except Exception:
+        return None
+
+def get_domain(url):
+    try:
+        if not is_nonempty_str(url) or not url.startswith(("http://", "https://")):
+            return None
+        return urlparse(url).netloc.replace("www.", "")
+    except Exception:
+        return None
+
+
+def website_type(url):
+    url_lower = safe_lower(url)
+    if not url_lower:
+        return "No Website"
+    if "facebook.com" in url_lower:
+        return "Facebook"
+    if "instagram.com" in url_lower:
+        return "Instagram"
+    return "Official Website"
+
+
+def burger_type(name):
+    name_lower = safe_lower(name)
+    if not name_lower:
+        return "Unknown"
+    if "grill" in name_lower:
+        return "Grill Burger"
+    if "fried" in name_lower:
+        return "Fried Chicken + Burger"
+    if "cafe" in name_lower:
+        return "Cafe Burger"
+    if "fast food" in name_lower:
+        return "Fast Food Burger"
+    return "General Burger"
+
+
+def price_category(level):
+    if not is_nonempty_str(level):
+        return "Unknown"
+    if level == "Cheap":
+        return "Budget"
+    if level == "Moderate":
+        return "Mid-range"
+    if level in ["Expensive", "Very Expensive"]:
+        return "Premium"
+    return "Unknown"
+
+
+def rating_category(rating):
+    if pd.isna(rating):
+        return "No Rating"
+    if rating >= 4.5:
+        return "Excellent"
+    if rating >= 4:
+        return "Good"
+    if rating >= 3:
+        return "Average"
+    return "Poor"
+
+
+def get_area(address):
+    address_lower = safe_lower(address)
+    if "gulshan" in address_lower:
+        return "Gulshan"
+    if "dhanmondi" in address_lower:
+        return "Dhanmondi"
+    if "uttara" in address_lower:
+        return "Uttara"
+    return "Other"
+
+
 
 def build_dataframes(all_places):
     raw_rows = []
@@ -220,7 +329,6 @@ def build_dataframes(all_places):
         maps_link = place.get("googleMapsUri")
         price_level = place.get("priceLevel")
         start_price, end_price = parse_price_range(place.get("priceRange"))
-        query_used = place.get("_query")
 
         phone = None
         website = None
@@ -260,8 +368,6 @@ def build_dataframes(all_places):
             "PriceRangeEnd": end_price,
             "GoogleMapsLink": maps_link,
             "Website": website,
-            "PlaceID": place_id,
-            "Query": query_used,
         })
 
         if idx % 10 == 0:
@@ -271,70 +377,174 @@ def build_dataframes(all_places):
 
     df_raw = pd.DataFrame(raw_rows)
 
-    # Cleaned copy
     df_clean = df_raw.copy()
 
-    # Keep only Dhaka rows
     df_clean = df_clean[df_clean["Address"].str.contains("Dhaka", case=False, na=False)]
 
-    # Remove duplicates
-    df_clean = df_clean.drop_duplicates(subset=["PlaceID"])
+    def get_domain(url):
+        try:
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                return None
+            
+            return urlparse(url).netloc.replace("www.", "")
+        except:
+            return None
+    df_clean["Domain"] = df_clean["Website"].apply(get_domain)
+    def website_type(url):
+        try:
+            if not isinstance(url, str) or not url:
+                return "No Website"
+            
+            url = url.lower()
 
-    # Trim spaces only for text columns
-    text_cols = ["Name", "Address", "Phone", "GoogleMapsLink", "Website", "Query", "PriceLevel", "PriceLevelText"]
-    for col in text_cols:
-        if col in df_clean.columns:
-            df_clean[col] = df_clean[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
+            if "facebook.com" in url:
+                return "Facebook"
+            elif "instagram.com" in url:
+                return "Instagram"
+            else:
+                return "Official Website"
+        except:
+            return "No Website"
 
-    # Convert missing values to blank Excel cells
+    df_clean["WebsiteType"] = df_clean["Website"].apply(website_type)
+    df_clean["Email"] = df_clean.apply(
+        lambda row: extract_email(row["Website"]) 
+        if row["WebsiteType"] == "Official Website" else None,
+        axis=1
+    )
+    
+    def burger_type(name):
+        name = str(name).lower()
+        
+        if "grill" in name:
+            return "Grill Burger"
+        elif "fried" in name:
+            return "Fried Chicken + Burger"
+        elif "cafe" in name:
+            return "Cafe Burger"
+        elif "fast food" in name:
+            return "Fast Food Burger"
+        else:
+            return "General Burger"
+
+    df_clean["BurgerType"] = df_clean["Name"].apply(burger_type)
+    
+    def price_category(level):
+        if level == "Cheap":
+            return "Budget"
+        elif level == "Moderate":
+            return "Mid-range"
+        elif level in ["Expensive", "Very Expensive"]:
+            return "Premium"
+        else:
+            return "Unknown"
+
+    df_clean["PriceCategory"] = df_clean["PriceLevel"].apply(price_category)
+    
+    def rating_category(rating):
+        if pd.isna(rating):
+            return "No Rating"
+        elif rating >= 4.5:
+            return "Excellent"
+        elif rating >= 4:
+            return "Good"
+        elif rating >= 3:
+            return "Average"
+        else:
+            return "Poor"
+
+    df_clean["RatingCategory"] = df_clean["Rating"].apply(rating_category)
+            
+    text_cols = df_clean.select_dtypes(include=["object", "string"]).columns
+
+    df_clean[text_cols] = df_clean[text_cols].apply(
+        lambda x: x.str.strip().str.replace(r"\s+", " ", regex=True)
+    )
+
     df_raw = df_raw.where(pd.notna(df_raw), pd.NA)
     df_clean = df_clean.where(pd.notna(df_clean), pd.NA)
     
+    def compute_value_score(row):
+        rating = row["Rating"]
+        price = row["PriceLevel"]
 
-    # Add numeric helper for sorting cheapest
-    df_clean["PriceLevelNum"] = df_clean["PriceLevel"].map(PRICE_MAP)
-    df_clean["ValueScore"] = df_clean["Rating"] / df_clean["PriceLevelNum"]
-    # Top rated
+        if pd.isna(rating) or pd.isna(price):
+            return pd.NA
+
+        price_num = PRICE_MAP.get(price)
+
+        if not price_num or price_num == 0:
+            return pd.NA
+
+        return rating / price_num
+
+
+    df_clean["ValueScore"] = df_clean.apply(compute_value_score, axis=1)
+    def get_area(address):
+        address = str(address).lower()
+        if "gulshan" in address:
+            return "Gulshan"
+        if "dhanmondi" in address:
+            return "Dhanmondi"
+        if "uttara" in address:
+            return "Uttara"
+        return "Other"
+    df_clean["Area"] = df_clean["Address"].apply(get_area)
+    
+    df_clean = col_order(df_clean, "Website", "GoogleMapsLink")
+
     top_rated = df_clean.sort_values(
         by=["Rating", "RatingCount"],
         ascending=[False, False],
         na_position="last"
     ).head(10)
 
-    # Cheapest / low price
-    cheapest = df_clean[df_clean["PriceLevelNum"].notna()].sort_values(
-        by=["PriceLevelNum", "Rating", "RatingCount"],
-        ascending=[True, False, False],
-        na_position="last"
+    cheapest = df_clean[df_clean["PriceLevel"].isin(["Free", "Cheap"])]
+    cheapest = cheapest.sort_values(by=["Rating"], ascending=False, na_position="last").head(10)
+    
+    most_reviewed = df_clean.sort_values(
+        by=["RatingCount"],
+        ascending=False, na_position="last"
     ).head(10)
+    
+    best_value = df_clean.sort_values(
+        by=["ValueScore"],
+        ascending=False
+    ).head(10)
+    
+    premium = df_clean[df_clean["PriceLevel"].isin(["Expensive", "Very Expensive"])]
+    premium = premium.sort_values(by=["Rating"], ascending=False, na_position="last").head(10)
+    
+    website_stats = df_clean["WebsiteType"].value_counts().reset_index()
+    website_stats.columns = ["WebsiteType", "Count"]
 
-    # Remove helper column from final exported views if you want
-    export_clean = df_clean.drop(columns=["PriceLevelNum"])
-    export_top = top_rated.drop(columns=["PriceLevelNum"], errors="ignore")
-    export_cheapest = cheapest.drop(columns=["PriceLevelNum"], errors="ignore")
+    area_stats = df_clean["Area"].value_counts().reset_index()
+    area_stats.columns = ["Area", "Count"]
 
-    return df_raw, export_clean, export_top, export_cheapest
+    sheets = {
+        "Raw": df_raw,
+        "Clean": df_clean,
+        "Cheapest": cheapest,
+        "Premium": premium,
+        "Top Rated": top_rated,
+        "Most Reviewed": most_reviewed,
+        "Best Valued" : best_value,
+        "Website Analysis": website_stats,
+        "Area Analysis": area_stats      
+    }
 
+    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+        for sheet_name, df in sheets.items():
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    for sheet_name in sheets.keys():
+        make_excel_links_clickable(output_file, sheet_name)
+    
+    print(f"Saved to {output_file}")
 
 def main():
     all_places = collect_places()
     print(f"\nTotal unique places collected: {len(all_places)}")
-
-    df_raw, df_clean, df_top, df_cheapest = build_dataframes(all_places)
-
-    output_file = "dhaka_burger_shops_mod.xlsx"
-
-    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-        df_raw.to_excel(writer, sheet_name="Raw_Uncleaned_Data", index=False)
-        df_clean.to_excel(writer, sheet_name="Cleaned_Data", index=False)
-        df_top.to_excel(writer, sheet_name="Top_Rated", index=False)
-        df_cheapest.to_excel(writer, sheet_name="Cheapest_LowPrice", index=False)
-
-    for sheet in ["Raw_Uncleaned_Data", "Cleaned_Data", "Top_Rated", "Cheapest_LowPrice"]:
-        make_excel_links_clickable(output_file, sheet)
-
-    print(f"Saved to {output_file}")
-
+    build_dataframes(all_places)
 
 if __name__ == "__main__":
     main()
