@@ -27,6 +27,8 @@ The focus is not only on extracting data but also on cleaning, structuring, and 
 📂 Files:
 - `daraz_search.py`
 - `daraz_kawaii_pen.xlsx`
+-`daraz_details.py`, `daraz_pages.py`
+- `daraz_listing.xlsx`, `daraz_full_dataset.xlsx`
 
 ---
 
