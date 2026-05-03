@@ -15,7 +15,6 @@ ratings_list = []
 
 for i in range(1,51):
     url = "https://books.toscrape.com/catalogue/page-"+str(i)+".html"
-
     r = requests.get(url)
     r.encoding = "utf-8"
     soup = BeautifulSoup(r.text,"lxml")
